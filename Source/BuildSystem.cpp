@@ -10,6 +10,7 @@
 struct Job {
 	std::vector<std::string> command;
 	std::size_t outstandingDependencies = 0;
+	// inverseDependencies are jobs that depend on us.
 	std::vector<Job *> inverseDependencies;
 	bool finished = false;
 };
@@ -17,6 +18,7 @@ struct Job {
 struct Engine {
 	std::size_t runningJobCount = 0;
 	std::size_t maximumJobCount = 4; // thang
+	// readyToDispatchQueue is for jobs that are ready to go but may be waiting for a job slot to open up (job slots are limited by the core/CPU count of the machine).
 	std::queue<Job *> readyToDispatchQueue;
 	std::map<std::string, Job *> jobLookupByTarget;
 	std::map<pid_t, Job *> jobLookupByPID;
@@ -62,6 +64,7 @@ void BeginJob(Engine &engine, Job *job) {
 
 void DispatchJobs(Engine &engine, const bool wait) {
 	for (;;) {
+		// Start some jobs that are in the queue.
 		while (engine.runningJobCount < engine.maximumJobCount && !engine.readyToDispatchQueue.empty()) {
 			Job *job = engine.readyToDispatchQueue.front();
 			engine.readyToDispatchQueue.pop();
@@ -75,10 +78,11 @@ void DispatchJobs(Engine &engine, const bool wait) {
 		const int result = waitpid(-1, &status, wait ? 0 : WNOHANG); // thang : should first parameter be 0 or -1?
 		if (result == 0) {
 			// No child has exited.
+			assert(!wait);
 			return;
 		} else if (result == -1) {
 			// Error.
-			throw 0;
+			throw 0; // thang
 		} else {
 			// A child has exited.
 			if (WIFEXITED(status)) {
@@ -100,7 +104,7 @@ void DispatchJobs(Engine &engine, const bool wait) {
 							engine.readyToDispatchQueue.push(job);
 					}
 				}
-			} else {
+			} else { // thang : test for more conditions than WIFEXITED?
 				throw 0; // thang
 			}
 		}
@@ -116,7 +120,7 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 
 	for (std::string &target : targets) {
 		auto result = engine.jobLookupByTarget.insert(std::pair<std::string, Job *>(std::move(target), job));
-		if (!result.second) {
+		if (!result.second) { // gigathang : this doesn't look right at all.
 			throw 0; // thang : duplicate target
 		}
 	}
@@ -124,7 +128,9 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 	for (const std::string &dependency : dependencies) {
 		const auto iterator = engine.jobLookupByTarget.find(dependency);
 		if (iterator == engine.jobLookupByTarget.end())
-			throw 0; // thang : dependency not found.
+			throw 0; // thang : dependency not found. // gigathang : shouldn't we check if the file exists if the dependency was not found in the job list?
+
+		// thang : check for cyclical dependencies?
 
 		if (!iterator->second->finished) {
 			++job->outstandingDependencies;

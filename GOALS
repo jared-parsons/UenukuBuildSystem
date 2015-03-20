@@ -1,0 +1,7 @@
+* Color output.
+* Parallel build.
+* Safe if multiple invocations are run simultaneously.
+* Multiple targets in one command.
+* Automatically create directories.
+* Safe if killed.
+* Rerun if commands change.
