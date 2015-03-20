@@ -1,7 +1,7 @@
 #include "JSONTokenizer.hpp"
 #include <stdexcept>
 
-JSONTokenizer::JSONTokenizer(std::istream &input)
+JSONTokenizer::JSONTokenizer(InputStream &input)
 	: _input(input)
 {
 }
@@ -15,7 +15,7 @@ namespace {
 		return character == ' ' || character == '\t' || character == '\r';
 	}
 
-	void SkipWhitespace(std::istream &input, std::size_t &lineNumber) {
+	void SkipWhitespace(InputStream &input, std::size_t &lineNumber) {
 		int character;
 		while (character = input.peek(), character != EOF) {
 			if (IsWhitespace(character, lineNumber)) {

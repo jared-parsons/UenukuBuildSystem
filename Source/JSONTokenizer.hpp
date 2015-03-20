@@ -1,8 +1,8 @@
 #ifndef GUARD_JSONTokenizer_hpp
 #define GUARD_JSONTokenizer_hpp
 
-#include <istream>
 #include <string>
+#include "InputStream.hpp"
 
 enum class JSONTokenType {
 	StartObject,
@@ -54,11 +54,11 @@ public:
 };
 
 class JSONTokenizer final {
-	std::istream &_input;
+	InputStream &_input;
 	std::size_t _lineNumber = 1;
 
 public:
-	explicit JSONTokenizer(std::istream &input);
+	explicit JSONTokenizer(InputStream &input);
 	bool ReadToken(JSONToken &token);
 	JSONToken ReadRequiredToken();
 	JSONToken ReadRequiredToken(JSONTokenType type);

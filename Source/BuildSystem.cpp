@@ -176,7 +176,7 @@ std::vector<std::string> ReadStringArray(JSONTokenizer &tokenizer) {
 	}
 }
 
-void ReadInput(std::istream &input) {
+void ReadInput(InputStream &input) {
 	Engine engine;
 
 	JSONTokenizer tokenizer(input);
@@ -230,10 +230,10 @@ void ReadInput(std::istream &input) {
 }
 
 int main() {
-	std::ifstream input;
-	input.open("Buildfile.json");
+	InputStream input;
+	input.file = popen("perl Buildfile.pl", "r"); // thang : error check...
 	ReadInput(input);
-	input.close();
+	input.Close();
 
 	return 0;
 }
