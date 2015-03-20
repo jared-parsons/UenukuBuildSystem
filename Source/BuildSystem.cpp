@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include "JSONTokenizer.hpp"
 #include <fstream>
+#include <sys/stat.h>
 
 /*
 Example input:
@@ -22,6 +23,8 @@ Example input:
 struct Job {
 	std::vector<std::string> command;
 	std::size_t outstandingDependencies = 0;
+	std::vector<std::string> dependencies;
+	std::vector<std::string> targets;
 	// inverseDependencies are jobs that depend on us.
 	std::vector<Job *> inverseDependencies;
 	bool finished = false;
@@ -49,6 +52,65 @@ std::string Join(const std::string &separator, const std::vector<std::string> &a
 	return result;
 }
 
+bool operator<(struct timespec a, struct timespec b) {
+	if (a.tv_sec < b.tv_sec) {
+		return true;
+	} else if (a.tv_sec > b.tv_sec) {
+		return false;
+	} else {
+		return a.tv_nsec < b.tv_nsec;
+	}
+}
+
+bool operator>=(struct timespec a, struct timespec b) {
+	return !(a < b);
+}
+
+bool IsJobNeeded(Job *job) {
+	// Commands with no targets are always run.
+	if (job->targets.size() == 0)
+		return true;
+
+	// Find the most recently built target.
+	struct timespec oldestTargetTime;
+	bool oldestTargetTimeSet = false;
+	for (const std::string &target : job->targets) {
+		struct stat fileInfo;
+		const int result = stat(target.c_str(), &fileInfo);
+		if (result != 0) {
+			// If a target does not exist we have to run the command.
+			if (errno == ENOENT)
+				return true;
+			throw 0; // thang
+		}
+		// thang : also look at ctim?
+		const timespec targetTime = fileInfo.st_mtim;
+		if (oldestTargetTimeSet) {
+			if (targetTime < oldestTargetTime)
+				oldestTargetTime = targetTime;
+		} else {
+			oldestTargetTime = targetTime;
+			oldestTargetTimeSet = true;
+		}
+	}
+
+	assert(oldestTargetTimeSet);
+
+	// If any dependency is newer than any target, rebuild.
+	for (const std::string &dependency : job->dependencies) {
+		struct stat fileInfo;
+		const int result = stat(dependency.c_str(), &fileInfo);
+		if (result != 0)
+			throw 0; // thang
+		// thang : also look at ctim?
+		const struct timespec dependencyTime = fileInfo.st_mtim;
+		if (dependencyTime >= oldestTargetTime) // thang: > or >=?
+			return true;
+	}
+
+	return false;
+}
+
 void BeginJob(Engine &engine, Job *job) {
 	std::cout << "[Begin] " << Join(" ", job->command) << "\n";
 
@@ -74,13 +136,27 @@ void BeginJob(Engine &engine, Job *job) {
 	}
 }
 
+void FinishJob(Engine &engine, Job *job) {
+	job->finished = true;
+	for (Job *job : job->inverseDependencies) {
+		assert(job->outstandingDependencies != 0);
+		--job->outstandingDependencies;
+		if (job->outstandingDependencies == 0)
+			engine.readyToDispatchQueue.push(job);
+	}
+}
+
+// If 'wait' is true, it will block until all jobs are done.
 void DispatchJobs(Engine &engine, const bool wait) {
 	for (;;) {
 		// Start some jobs that are in the queue.
 		while (engine.runningJobCount < engine.maximumJobCount && !engine.readyToDispatchQueue.empty()) {
 			Job *job = engine.readyToDispatchQueue.front();
 			engine.readyToDispatchQueue.pop();
-			BeginJob(engine, job);
+			if (IsJobNeeded(job))
+				BeginJob(engine, job);
+			else
+				FinishJob(engine, job);
 		}
 
 		if (engine.runningJobCount == 0)
@@ -108,13 +184,7 @@ void DispatchJobs(Engine &engine, const bool wait) {
 
 					Job *finishedJob = iterator->second;
 					engine.jobLookupByPID.erase(iterator);
-					finishedJob->finished = true;
-					for (Job *job : finishedJob->inverseDependencies) {
-						assert(job->outstandingDependencies != 0);
-						--job->outstandingDependencies;
-						if (job->outstandingDependencies == 0)
-							engine.readyToDispatchQueue.push(job);
-					}
+					FinishJob(engine, finishedJob);
 				}
 			} else { // thang : test for more conditions than WIFEXITED?
 				throw 0; // thang
@@ -130,25 +200,24 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 		throw 0; // thang
 	job->command = std::move(command);
 
-	for (std::string &target : targets) {
-		auto result = engine.jobLookupByTarget.insert(std::pair<std::string, Job *>(std::move(target), job));
+	for (const std::string &target : targets) {
+		auto result = engine.jobLookupByTarget.insert(std::pair<std::string, Job *>(target, job));
 		if (!result.second) { // gigathang : this doesn't look right at all.
 			throw 0; // thang : duplicate target
 		}
 	}
 
 	for (const std::string &dependency : dependencies) {
-		const auto iterator = engine.jobLookupByTarget.find(dependency);
-		if (iterator == engine.jobLookupByTarget.end())
-			throw 0; // thang : dependency not found. // gigathang : shouldn't we check if the file exists if the dependency was not found in the job list?
-
 		// thang : check for cyclical dependencies?
-
-		if (!iterator->second->finished) {
+		const auto iterator = engine.jobLookupByTarget.find(dependency);
+		if (iterator != engine.jobLookupByTarget.end() && !iterator->second->finished) {
 			++job->outstandingDependencies;
 			iterator->second->inverseDependencies.push_back(job); // thang : check for duplicates?
 		}
 	}
+
+	job->targets = std::move(targets);
+	job->dependencies = std::move(dependencies);
 
 	if (job->outstandingDependencies == 0)
 		engine.readyToDispatchQueue.push(job);
