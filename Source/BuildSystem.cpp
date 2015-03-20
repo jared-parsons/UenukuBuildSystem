@@ -6,6 +6,18 @@
 #include <assert.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "JSONTokenizer.hpp"
+#include <fstream>
+
+/*
+Example input:
+
+[{
+	"cmd" : ["clang++", "-std=c++11", "-Wall", "-Wextra", "-o", "foo", "foo.cpp"],
+	"dep" : ["foo.hpp", "foo.hpp"],
+	"tgt" : ["foo"],
+}]
+*/
 
 struct Job {
 	std::vector<std::string> command;
@@ -144,13 +156,84 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 	DispatchJobs(engine, false);
 }
 
-int main() {
+std::vector<std::string> ReadStringArray(JSONTokenizer &tokenizer) {
+	std::vector<std::string> result;
+
+	tokenizer.ReadRequiredToken(JSONTokenType::StartList);
+	for (;;) {
+		JSONToken token = tokenizer.ReadRequiredToken();
+		if (token.GetType() == JSONTokenType::ListSeparator) // thang : don't make this check if this is the first loop iteration?
+			token = tokenizer.ReadRequiredToken();
+
+		if (token.GetType() == JSONTokenType::String) {
+			result.push_back(token.GetValue());
+		} else if (token.GetType() == JSONTokenType::EndList) {
+			// thang : check that a separator was not discarded?
+			return result;
+		} else {
+			throw std::runtime_error("Unexpected token.");
+		}
+	}
+}
+
+void ReadInput(std::istream &input) {
 	Engine engine;
-	EnqueueJob(engine, {"bash", "-c", "sleep 2 && echo a"}, {"a"}, {});
-	EnqueueJob(engine, {"bash", "-c", "sleep 2 && echo b"}, {"b"}, {"a"});
-	EnqueueJob(engine, {"bash", "-c", "sleep 2 && echo c"}, {"c"}, {"a"});
-	EnqueueJob(engine, {"bash", "-c", "sleep 2 && echo d"}, {"d"}, {"b", "c"});
+
+	JSONTokenizer tokenizer(input);
+
+	tokenizer.ReadRequiredToken(JSONTokenType::StartList);
+	for (;;) {
+		JSONToken token = tokenizer.ReadRequiredToken();
+		if (token.GetType() == JSONTokenType::ListSeparator) // thang : don't make this check if this is the first loop iteration?
+			token = tokenizer.ReadRequiredToken();
+
+		if (token.GetType() == JSONTokenType::StartObject) {
+			std::vector<std::string> command;
+			std::vector<std::string> targets;
+			std::vector<std::string> dependencies;
+
+			for (;;) {
+				JSONToken token = tokenizer.ReadRequiredToken();
+				if (token.GetType() == JSONTokenType::ListSeparator) // thang : don't make this check if this is the first loop iteration?
+					token = tokenizer.ReadRequiredToken();
+
+				if (token.GetType() == JSONTokenType::EndObject) {
+					// thang : check that command is set?
+					break;
+				} else if (token.GetType() == JSONTokenType::String) {
+					tokenizer.ReadRequiredToken(JSONTokenType::PairSeparator);
+					if (token.GetValue() == "cmd") {
+						command = ReadStringArray(tokenizer);
+						// thang : make sure command length is non zero? and first argument has non-zero length?
+					} else if (token.GetValue() == "tgt") {
+						targets = ReadStringArray(tokenizer);
+					} else if (token.GetValue() == "dep") {
+						dependencies = ReadStringArray(tokenizer);
+					} else {
+						throw std::runtime_error("Unexpected token.");
+					}
+				} else {
+					throw std::runtime_error("Unexpected token line " + std::to_string(token.GetLineNumber()));
+				}
+			}
+			EnqueueJob(engine, std::move(command), std::move(targets), std::move(dependencies));
+		} else if (token.GetType() == JSONTokenType::EndList) {
+			// thang : check that a separator was not discarded?
+			// thang : test if end of file?
+			break;
+		} else {
+			throw std::runtime_error("Unexpected token.");
+		}
+	}
+
 	DispatchJobs(engine, true);
+}
+
+int main() {
+	std::ifstream input;
+	input.open("Buildfile.json");
+	ReadInput(input);
+	input.close();
 
 	return 0;
 }
