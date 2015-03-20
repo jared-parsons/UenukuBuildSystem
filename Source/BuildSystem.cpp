@@ -152,9 +152,9 @@ void CreateDirectoriesForJob(const Job *const job) {
 }
 
 void BeginJob(Engine &engine, Job *job) {
-	std::cout << "[Begin] " << Join(" ", job->command) << "\n";
-
 	CreateDirectoriesForJob(job);
+
+	std::cout << "[Begin] " << Join(" ", job->command) << "\n";
 
 	const pid_t childPID = fork();
 	if (childPID == 0) {
