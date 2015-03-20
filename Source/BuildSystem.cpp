@@ -111,8 +111,50 @@ bool IsJobNeeded(Job *job) {
 	return false;
 }
 
+void CreateDirectoryForTarget(const std::string target) {
+	// thang : this directory is probably wrong...
+
+	auto iterator = target.begin();
+	auto lastSlashIterator = target.end();
+	while (iterator != target.end()) {
+		if (*iterator == '/') {
+			lastSlashIterator = iterator;
+		}
+		++iterator; // thang : we could optimize by going backwards...
+	}
+	if (lastSlashIterator == target.end()) {
+		// Target does not have a directory component.
+		return;
+	}
+	std::string path(target.begin(), lastSlashIterator);
+	struct stat fileInfo;
+	if (stat(path.c_str(), &fileInfo) == 0) {
+		// thang : check if it is a directory.
+		return;
+	}
+
+	std::cout << "[DIR] Creating directory " << path << "\n";
+
+	char lastCharacter = '/';
+	for (auto iterator = target.begin(); iterator != target.end(); ++iterator) {
+		if (*iterator == '/' && lastCharacter != '/') {
+			std::string path(target.begin(), iterator);
+			mkdir(path.c_str(), 0777); // thang : error check...
+		}
+		lastCharacter = *iterator;
+	}
+}
+
+void CreateDirectoriesForJob(const Job *const job) {
+	for (const std::string &target : job->targets) {
+		CreateDirectoryForTarget(target);
+	}
+}
+
 void BeginJob(Engine &engine, Job *job) {
 	std::cout << "[Begin] " << Join(" ", job->command) << "\n";
+
+	CreateDirectoriesForJob(job);
 
 	const pid_t childPID = fork();
 	if (childPID == 0) {
