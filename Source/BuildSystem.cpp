@@ -17,6 +17,7 @@ Example input:
 	"cmd" : ["clang++", "-std=c++11", "-Wall", "-Wextra", "-o", "foo", "foo.cpp"],
 	"dep" : ["foo.hpp", "foo.hpp"],
 	"tgt" : ["foo"],
+	"msg" : "compiling 'foo.cpp'"
 }]
 */
 
@@ -32,6 +33,7 @@ struct Job {
 	std::size_t outstandingDependencies = 0;
 	std::vector<std::string> dependencies;
 	std::vector<std::string> targets;
+	std::string message;
 	// inverseDependencies are jobs that depend on us.
 	std::vector<Job *> inverseDependencies;
 	bool finished = false;
@@ -161,7 +163,7 @@ void CreateDirectoriesForJob(const Job *const job) {
 void BeginJob(Engine &engine, Job *job) {
 	CreateDirectoriesForJob(job);
 
-	std::cout << commandMessage_ << " " << Join(" ", job->command) << "\n";
+	std::cout << commandMessage_ << " Begin " << job->message << ".\n";
 
 	const pid_t childPID = fork();
 	if (childPID == 0) {
@@ -228,14 +230,14 @@ void DispatchJobs(Engine &engine, const bool wait) {
 					Job *finishedJob = iterator->second;
 					const int exitStatus = WEXITSTATUS(status);
 					if (exitStatus != 0) {
-						std::cerr << errorMessage_ << " Command '" << Join(" ", finishedJob->command) << "' failed with exit code " << exitStatus << ".\n";
+						std::cerr << errorMessage_ << " Failed " << finishedJob->message << ". Exit code was " << exitStatus << ".\n";
 						exit(1);
 					}
 
 					--engine.runningJobCount;
 
 					engine.jobLookupByPID.erase(iterator);
-					std::cout << successMessage_ << " " << Join(" ", finishedJob->command) << "\n";
+					std::cout << successMessage_ << " Finished " << finishedJob->message << ".\n";
 					FinishJob(engine, finishedJob);
 				}
 			} else { // thang : test for more conditions than WIFEXITED?
@@ -245,8 +247,9 @@ void DispatchJobs(Engine &engine, const bool wait) {
 	}
 }
 
-void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<std::string> targets, std::vector<std::string> dependencies) {
+void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<std::string> targets, std::vector<std::string> dependencies, std::string message) {
 	Job *job = new Job; // thang : leaks on throw
+	job->message = std::move(message);
 
 	if (command.size() == 0)
 		throw 0; // thang
@@ -312,6 +315,8 @@ void ReadInput(InputStream &input) {
 			std::vector<std::string> command;
 			std::vector<std::string> targets;
 			std::vector<std::string> dependencies;
+			std::string message;
+			bool messageSet = false;
 
 			for (;;) {
 				JSONToken token = tokenizer.ReadRequiredToken();
@@ -330,6 +335,10 @@ void ReadInput(InputStream &input) {
 						targets = ReadStringArray(tokenizer);
 					} else if (token.GetValue() == "dep") {
 						dependencies = ReadStringArray(tokenizer);
+					} else if (token.GetValue() == "msg") {
+						const JSONToken token = tokenizer.ReadRequiredToken(JSONTokenType::String);
+						message = token.GetValue();
+						messageSet = true;
 					} else {
 						throw std::runtime_error("Unexpected token.");
 					}
@@ -337,7 +346,10 @@ void ReadInput(InputStream &input) {
 					throw std::runtime_error("Unexpected token line " + std::to_string(token.GetLineNumber()));
 				}
 			}
-			EnqueueJob(engine, std::move(command), std::move(targets), std::move(dependencies));
+			if (!messageSet) {
+				message = Join(" ", command);
+			}
+			EnqueueJob(engine, std::move(command), std::move(targets), std::move(dependencies), std::move(message));
 		} else if (token.GetType() == JSONTokenType::EndList) {
 			// thang : check that a separator was not discarded?
 			// thang : test if end of file?
