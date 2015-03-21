@@ -20,6 +20,13 @@ Example input:
 }]
 */
 
+namespace {
+	const char *commandMessage_ =   "[\e[1;35m?\e[0m]";
+	const char *directoryMessage_ = "[\e[1;36m/\e[0m]";
+	const char *successMessage_ =   "[\e[1;32mS\e[0m]";
+	const char *errorMessage_ =     "[\e[1;31m!\e[0m]";
+}
+
 struct Job {
 	std::vector<std::string> command;
 	std::size_t outstandingDependencies = 0;
@@ -133,7 +140,7 @@ void CreateDirectoryForTarget(const std::string target) {
 		return;
 	}
 
-	std::cout << "[DIR] Creating directory " << path << "\n";
+	std::cout << directoryMessage_ << " Creating directory '" << path << "'.\n";
 
 	char lastCharacter = '/';
 	for (auto iterator = target.begin(); iterator != target.end(); ++iterator) {
@@ -154,7 +161,7 @@ void CreateDirectoriesForJob(const Job *const job) {
 void BeginJob(Engine &engine, Job *job) {
 	CreateDirectoriesForJob(job);
 
-	std::cout << "[Begin] " << Join(" ", job->command) << "\n";
+	std::cout << commandMessage_ << " " << Join(" ", job->command) << "\n";
 
 	const pid_t childPID = fork();
 	if (childPID == 0) {
@@ -216,16 +223,19 @@ void DispatchJobs(Engine &engine, const bool wait) {
 		} else {
 			// A child has exited.
 			if (WIFEXITED(status)) {
-				const int exitStatus = WEXITSTATUS(status);
-				if (exitStatus != 0)
-					throw 0; // thang
-
 				const auto iterator = engine.jobLookupByPID.find(result);
-				if (iterator != engine.jobLookupByPID.end()) {
+				if (iterator != engine.jobLookupByPID.end()) { // thang : what to do if this fails? [ignore?]
+					Job *finishedJob = iterator->second;
+					const int exitStatus = WEXITSTATUS(status);
+					if (exitStatus != 0) {
+						std::cerr << errorMessage_ << " Command '" << Join(" ", finishedJob->command) << "' failed with exit code " << exitStatus << ".\n";
+						exit(1);
+					}
+
 					--engine.runningJobCount;
 
-					Job *finishedJob = iterator->second;
 					engine.jobLookupByPID.erase(iterator);
+					std::cout << successMessage_ << " " << Join(" ", finishedJob->command) << "\n";
 					FinishJob(engine, finishedJob);
 				}
 			} else { // thang : test for more conditions than WIFEXITED?
