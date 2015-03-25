@@ -1,8 +1,9 @@
 SOURCE_FILES=$(wildcard Source/*.cpp)
 HEADER_FILES=$(wildcard Source/*.hpp)
 BUILD_DIRECTORY=Build
+BINARY_NAME=ubuild
 
-$(BUILD_DIRECTORY)/build : $(SOURCE_FILES) $(HEADER_FILES) Makefile
+$(BUILD_DIRECTORY)/$(BINARY_NAME) : $(SOURCE_FILES) $(HEADER_FILES) Makefile
 	mkdir -p $(BUILD_DIRECTORY)
 	clang++ -std=c++11 -Wall -Wextra -Werror -g -o $@ $(SOURCE_FILES)
 
