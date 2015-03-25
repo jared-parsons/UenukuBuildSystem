@@ -9,6 +9,7 @@
 #include "JSONTokenizer.hpp"
 #include <fstream>
 #include <sys/stat.h>
+#include "Platform.hpp"
 
 /*
 Example input:
@@ -75,6 +76,14 @@ bool operator>=(struct timespec a, struct timespec b) {
 	return !(a < b);
 }
 
+struct timespec GetMTime(struct stat &fileInfo) {
+#if PLATFORM == PLATFORM_MAC_OSX
+	return fileInfo.st_mtimespec;
+#else
+	return fileInfo.st_mtim;
+#endif
+}
+
 bool IsJobNeeded(Job *job) {
 	// Commands with no targets are always run.
 	if (job->targets.size() == 0)
@@ -93,7 +102,7 @@ bool IsJobNeeded(Job *job) {
 			throw 0; // thang
 		}
 		// thang : also look at ctim?
-		const timespec targetTime = fileInfo.st_mtim;
+		const timespec targetTime = GetMTime(fileInfo);
 		if (oldestTargetTimeSet) {
 			if (targetTime < oldestTargetTime)
 				oldestTargetTime = targetTime;
@@ -112,7 +121,7 @@ bool IsJobNeeded(Job *job) {
 		if (result != 0)
 			throw 0; // thang
 		// thang : also look at ctim?
-		const struct timespec dependencyTime = fileInfo.st_mtim;
+		const struct timespec dependencyTime = GetMTime(fileInfo);
 		if (dependencyTime >= oldestTargetTime) // thang: > or >=?
 			return true;
 	}
