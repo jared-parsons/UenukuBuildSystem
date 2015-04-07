@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sys/stat.h>
 #include "Platform.hpp"
+#include <string.h>
 
 /*
 Example input:
@@ -48,6 +49,21 @@ struct Engine {
 	std::map<std::string, Job *> jobLookupByTarget;
 	std::map<pid_t, Job *> jobLookupByPID;
 };
+
+namespace {
+	void Error(std::string description) {
+		std::cerr << errorMessage_ << " " << description << "\n";
+		exit(1);
+	}
+
+	void ErrnoError(int errnum) {
+		Error(strerror(errnum));
+	}
+
+	std::string QuotePath(std::string path) {
+		return "'" + path + "'"; // thang : this could be improved.
+	}
+}
 
 std::string Join(const std::string &separator, const std::vector<std::string> &array) {
 	std::string result;
@@ -99,7 +115,7 @@ bool IsJobNeeded(Job *job) {
 			// If a target does not exist we have to run the command.
 			if (errno == ENOENT)
 				return true;
-			throw 0; // thang
+			ErrnoError(errno);
 		}
 		// thang : also look at ctim?
 		const timespec targetTime = GetMTime(fileInfo);
@@ -118,8 +134,13 @@ bool IsJobNeeded(Job *job) {
 	for (const std::string &dependency : job->dependencies) {
 		struct stat fileInfo;
 		const int result = stat(dependency.c_str(), &fileInfo);
-		if (result != 0)
-			throw 0; // thang
+		if (result != 0) {
+			// gigathang : this error path is not tested...
+			if (errno == ENOENT)
+				Error("Dependency does not exist: " + QuotePath(dependency) + ".");
+			else
+				ErrnoError(errno);
+		}
 		// thang : also look at ctim?
 		const struct timespec dependencyTime = GetMTime(fileInfo);
 		if (dependencyTime >= oldestTargetTime) // thang: > or >=?
@@ -184,7 +205,7 @@ void BeginJob(Engine &engine, Job *job) {
 		arguments[job->command.size()] = nullptr;
 
 		execvp(job->command[0].c_str(), arguments);
-		throw 0; // thang
+		ErrnoError(errno);
 	} else if (childPID != -1) {
 		// We are the parent.
 		assert(engine.runningJobCount < engine.maximumJobCount);
@@ -192,7 +213,7 @@ void BeginJob(Engine &engine, Job *job) {
 		engine.jobLookupByPID[childPID] = job;
 	} else {
 		// Error.
-		throw 0; // thang
+		ErrnoError(errno);
 	}
 }
 
@@ -230,17 +251,16 @@ void DispatchJobs(Engine &engine, const bool wait) {
 			return;
 		} else if (result == -1) {
 			// Error.
-			throw 0; // thang
+			ErrnoError(errno);
 		} else {
 			// A child has exited.
-			if (WIFEXITED(status)) {
-				const auto iterator = engine.jobLookupByPID.find(result);
-				if (iterator != engine.jobLookupByPID.end()) { // thang : what to do if this fails? [ignore?]
-					Job *finishedJob = iterator->second;
+			const auto iterator = engine.jobLookupByPID.find(result);
+			if (iterator != engine.jobLookupByPID.end()) { // thang : what to do if this fails? [ignore?]
+				Job *finishedJob = iterator->second;
+				if (WIFEXITED(status)) {
 					const int exitStatus = WEXITSTATUS(status);
 					if (exitStatus != 0) {
-						std::cerr << errorMessage_ << " Failed " << finishedJob->message << ". Exit code was " << exitStatus << ".\n";
-						exit(1);
+						Error(std::string("Failed ") + finishedJob->message + ". Exit code was " + std::to_string(exitStatus) + ".");
 					}
 
 					--engine.runningJobCount;
@@ -248,9 +268,11 @@ void DispatchJobs(Engine &engine, const bool wait) {
 					engine.jobLookupByPID.erase(iterator);
 					std::cout << successMessage_ << " Finished " << finishedJob->message << ".\n";
 					FinishJob(engine, finishedJob);
+				} else if (WIFSIGNALED(status)) {
+					Error(std::string("Failed ") + finishedJob->message + ". Was killed by signal " + std::to_string(WTERMSIG(status)) + ".");
+				} else {
+					Error(std::string("Failed ") + finishedJob->message + ".");
 				}
-			} else { // thang : test for more conditions than WIFEXITED?
-				throw 0; // thang
 			}
 		}
 	}
@@ -261,13 +283,13 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 	job->message = std::move(message);
 
 	if (command.size() == 0)
-		throw 0; // thang
+		Error("Not command specified.");
 	job->command = std::move(command);
 
 	for (const std::string &target : targets) {
 		auto result = engine.jobLookupByTarget.insert(std::pair<std::string, Job *>(target, job));
 		if (!result.second) { // gigathang : this doesn't look right at all.
-			throw 0; // thang : duplicate target
+			Error("Target " + QuotePath(target) + " has already been specified.");
 		}
 	}
 
@@ -304,7 +326,7 @@ std::vector<std::string> ReadStringArray(JSONTokenizer &tokenizer) {
 			// thang : check that a separator was not discarded?
 			return result;
 		} else {
-			throw std::runtime_error("Unexpected token.");
+			Error("Unexpected token.");
 		}
 	}
 }
@@ -349,10 +371,10 @@ void ReadInput(InputStream &input) {
 						message = token.GetValue();
 						messageSet = true;
 					} else {
-						throw std::runtime_error("Unexpected token.");
+						Error("Unexpected token.");
 					}
 				} else {
-					throw std::runtime_error("Unexpected token line " + std::to_string(token.GetLineNumber()));
+					Error("Unexpected token line " + std::to_string(token.GetLineNumber()));
 				}
 			}
 			if (!messageSet) {
@@ -364,7 +386,7 @@ void ReadInput(InputStream &input) {
 			// thang : test if end of file?
 			break;
 		} else {
-			throw std::runtime_error("Unexpected token.");
+			Error("Unexpected token.");
 		}
 	}
 
@@ -372,10 +394,14 @@ void ReadInput(InputStream &input) {
 }
 
 int main() {
-	InputStream input;
-	input.file = popen("perl Buildfile.pl", "r"); // thang : error check...
-	ReadInput(input);
-	input.Close();
+	try {
+		InputStream input;
+		input.file = popen("perl Buildfile.pl", "r"); // thang : error check...
+		ReadInput(input);
+		input.Close();
+	} catch (std::exception &exception) {
+		std::cerr << "An error occured " << exception.what() << "\n";
+	}
 
 	return 0;
 }
