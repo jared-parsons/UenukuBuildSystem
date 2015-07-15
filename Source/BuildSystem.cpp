@@ -34,6 +34,7 @@ struct Job {
 	std::vector<std::string> command;
 	std::size_t outstandingDependencies = 0;
 	std::vector<std::string> dependencies;
+	std::vector<std::string> optionalDependencies;
 	std::vector<std::string> targets;
 	std::string message;
 	// inverseDependencies are jobs that depend on us.
@@ -130,27 +131,36 @@ bool IsJobNeeded(Job *job) {
 
 	assert(oldestTargetTimeSet);
 
-	// If any dependency is newer than any target, rebuild.
-	for (const std::string &dependency : job->dependencies) {
-		struct stat fileInfo;
-		const int result = stat(dependency.c_str(), &fileInfo);
-		if (result != 0) {
-			// gigathang : this error path is not tested...
-			if (errno == ENOENT)
-				Error("Dependency does not exist: " + QuotePath(dependency) + ".");
-			else
-				ErrnoError(errno);
+	const auto isDependencyOutOfDate = [oldestTargetTime](const std::vector<std::string> &dependencies, bool required) -> bool {
+		// If any dependency is newer than any target, rebuild.
+		for (const std::string &dependency : dependencies) {
+			struct stat fileInfo;
+			const int result = stat(dependency.c_str(), &fileInfo);
+			if (result != 0) {
+				// gigathang : this error path is not tested...
+				if (errno == ENOENT) {
+					if (required) {
+						Error("Dependency does not exist: " + QuotePath(dependency) + ".");
+					} else {
+						continue;
+					}
+				} else {
+					ErrnoError(errno);
+				}
+			}
+			// thang : also look at ctim?
+			const struct timespec dependencyTime = GetMTime(fileInfo);
+			if (dependencyTime >= oldestTargetTime) // thang: > or >=?
+				return true;
 		}
-		// thang : also look at ctim?
-		const struct timespec dependencyTime = GetMTime(fileInfo);
-		if (dependencyTime >= oldestTargetTime) // thang: > or >=?
-			return true;
-	}
 
-	return false;
+		return false;
+	};
+
+	return isDependencyOutOfDate(job->dependencies, true) || isDependencyOutOfDate(job->optionalDependencies, false);
 }
 
-void CreateDirectoryForTarget(const std::string target) {
+void CreateDirectoryForTarget(const std::string &target) {
 	// thang : this directory is probably wrong...
 
 	auto iterator = target.begin();
@@ -278,7 +288,7 @@ void DispatchJobs(Engine &engine, const bool wait) {
 	}
 }
 
-void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<std::string> targets, std::vector<std::string> dependencies, std::string message) {
+void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<std::string> targets, std::vector<std::string> dependencies, std::vector<std::string> optionalDependencies, std::string message) {
 	Job *job = new Job; // thang : leaks on throw
 	job->message = std::move(message);
 
@@ -293,17 +303,23 @@ void EnqueueJob(Engine &engine, std::vector<std::string> command, std::vector<st
 		}
 	}
 
-	for (const std::string &dependency : dependencies) {
-		// thang : check for cyclical dependencies?
-		const auto iterator = engine.jobLookupByTarget.find(dependency);
-		if (iterator != engine.jobLookupByTarget.end() && !iterator->second->finished) {
-			++job->outstandingDependencies;
-			iterator->second->inverseDependencies.push_back(job); // thang : check for duplicates?
+	const auto setupInverseDependencies = [&engine, job](const std::vector<std::string> &dependencies) {
+		for (const std::string &dependency : dependencies) {
+			// thang : check for cyclical dependencies?
+			const auto iterator = engine.jobLookupByTarget.find(dependency);
+			if (iterator != engine.jobLookupByTarget.end() && !iterator->second->finished) {
+				++job->outstandingDependencies;
+				iterator->second->inverseDependencies.push_back(job); // thang : check for duplicates?
+			}
 		}
-	}
+	};
+
+	setupInverseDependencies(dependencies);
+	setupInverseDependencies(optionalDependencies);
 
 	job->targets = std::move(targets);
 	job->dependencies = std::move(dependencies);
+	job->optionalDependencies = std::move(optionalDependencies);
 
 	if (job->outstandingDependencies == 0)
 		engine.readyToDispatchQueue.push(job);
@@ -346,6 +362,7 @@ void ReadInput(InputStream &input) {
 			std::vector<std::string> command;
 			std::vector<std::string> targets;
 			std::vector<std::string> dependencies;
+			std::vector<std::string> optionalDependencies;
 			std::string message;
 			bool messageSet = false;
 
@@ -366,6 +383,8 @@ void ReadInput(InputStream &input) {
 						targets = ReadStringArray(tokenizer);
 					} else if (token.GetValue() == "dep") {
 						dependencies = ReadStringArray(tokenizer);
+					} else if (token.GetValue() == "optdep") {
+						optionalDependencies = ReadStringArray(tokenizer);
 					} else if (token.GetValue() == "msg") {
 						const JSONToken token = tokenizer.ReadRequiredToken(JSONTokenType::String);
 						message = token.GetValue();
@@ -380,7 +399,7 @@ void ReadInput(InputStream &input) {
 			if (!messageSet) {
 				message = Join(" ", command);
 			}
-			EnqueueJob(engine, std::move(command), std::move(targets), std::move(dependencies), std::move(message));
+			EnqueueJob(engine, std::move(command), std::move(targets), std::move(dependencies), std::move(optionalDependencies), std::move(message));
 		} else if (token.GetType() == JSONTokenType::EndList) {
 			// thang : check that a separator was not discarded?
 			// thang : test if end of file?
